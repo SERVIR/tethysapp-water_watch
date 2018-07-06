@@ -30,7 +30,9 @@ var LIBRARY_OBJECT = (function() {
     /************************************************************************
      *                    PRIVATE FUNCTION DECLARATIONS
      *************************************************************************/
-    var init_all,
+    var generate_chart,
+        generate_forecast,
+        init_all,
         init_events,
         init_vars,
         init_map;
@@ -46,7 +48,7 @@ var LIBRARY_OBJECT = (function() {
     };
 
     init_map = function(){
-             var attribution = new ol.Attribution({
+        var attribution = new ol.Attribution({
             html: 'Tiles © <a href="https://services.arcgisonline.com/ArcGIS/rest/services/">ArcGIS</a>'
         });
 
@@ -132,22 +134,22 @@ var LIBRARY_OBJECT = (function() {
 
         });
 
-        map.on("singleclick",function(evt) {
+        map.on("singleclick",function(evt){
 
             var zoom = map.getView().getZoom();
             $chartModal.modal('show');
-            if (zoom < 14) {
+            if (zoom < 14){
 
                 $('.info').html('<b>The zoom level has to be 14 or greater. Please check and try again.</b>');
                 $('#info').removeClass('hidden');
                 return false;
-            } else {
+            }else{
                 $('.info').html('');
                 $('#info').addClass('hidden');
             }
 
             var clickCoord = evt.coordinate;
-            var proj_coords = ol.proj.transform(clickCoord, 'EPSG:3857', 'EPSG:4326');
+            var proj_coords = ol.proj.transform(clickCoord, 'EPSG:3857','EPSG:4326');
             $("#current-lat").val(proj_coords[1]);
             $("#current-lon").val(proj_coords[0]);
             var $loading = $('#view-file-loading');
@@ -157,14 +159,211 @@ var LIBRARY_OBJECT = (function() {
             $("#plotter").addClass('hidden');
             $("#forecast-plotter").addClass('hidden');
             //$tsplotModal.modal('show');
+            var xhr = ajax_update_database('timeseries',{'lat':proj_coords[1],'lon':proj_coords[0]},'name');
+            xhr.done(function(data) {
+                if("success" in data) {
+                    $('.info').html('');
+                    map.getLayers().item(3).getSource().setUrl("");
+                    var polygon = new ol.geom.Polygon(data.coordinates);
+                    polygon.applyTransform(ol.proj.getTransform('EPSG:4326', 'EPSG:3857'));
+                    var feature = new ol.Feature(polygon);
+
+                    map.getLayers().item(5).getSource().clear();
+                    select_feature_source.addFeature(feature);
+
+                    generate_chart(data.values,proj_coords[1],proj_coords[0],data.name);
+
+                    $loading.addClass('hidden');
+                    $("#plotter").removeClass('hidden');
+
+                }else{
+                    $('.info').html('<b>Error processing the request. Please be sure to click on a feature.'+data.error+'</b>');
+                    $('#info').removeClass('hidden');
+                    $loading.addClass('hidden');
+
+                }
+            });
 
 
+
+            var yhr = ajax_update_database('forecast',{'lat':proj_coords[1],'lon':proj_coords[0]},'name');
+            yhr.done(function(data) {
+                if("success" in data) {
+                    $('.info').html('');
+                    map.getLayers().item(3).getSource().setUrl("");
+                    var polygon = new ol.geom.Polygon(data.coordinates);
+                    polygon.applyTransform(ol.proj.getTransform('EPSG:4326', 'EPSG:3857'));
+                    var feature = new ol.Feature(polygon);
+
+                    map.getLayers().item(5).getSource().clear();
+                    select_feature_source.addFeature(feature);
+
+                    generate_forecast(data.values,proj_coords[1],proj_coords[0],data.name);
+
+                    $loadingF.addClass('hidden');
+                    $("#forecast-plotter").removeClass('hidden');
+
+                }else{
+                    $('.info').html('<b>Error processing the request. Please be sure to click on a feature.'+data.error+'</b>');
+                    $('#info').removeClass('hidden');
+                    $loadingF.addClass('hidden');
+
+                }
+            });
         });
 
-
-
-
     };
+
+    generate_chart = function(data,lat,lon,name){
+        Highcharts.stockChart('plotter',{
+            chart: {
+                type:'line',
+                zoomType: 'x'
+            },
+            plotOptions: {
+                series: {
+                    marker: {
+                        enabled: true
+                    },
+                    allowPointSelect:true,
+                    cursor: 'pointer',
+                    point: {
+                        events: {
+                            click: function () {
+                                $('.info').html('');
+                                $("#meta-table").html('');
+                                $("#reset").addClass('hidden');
+                                $("#layers_checkbox").addClass('hidden');
+                                var lat = $("#current-lat").val();
+                                var lon = $("#current-lon").val();
+                                var xhr = ajax_update_database('mndwi',{'xValue':this.x,'yValue':this.y,'lat':lat,'lon':lon});
+                                xhr.done(function(data) {
+                                    if("success" in data) {
+                                        map.getLayers().item(3).getSource().setUrl("https://earthengine.googleapis.com/map/"+data.water_mapid+"/{z}/{x}/{y}?token="+data.water_token);
+                                        $("#meta-table").append('<tbody><tr><th>Latitude</th><td>'+(parseFloat(lat).toFixed(6))+'</td></tr><tr><th>Longitude</th><td>'+(parseFloat(lon).toFixed(6))+'</td></tr><tr><th>Current Date</th><td>'+data.date+'</td></tr><tr><th>Scene Cloud Cover</th><td>'+data.cloud_cover+'</td></tr></tbody>');
+                                        $("#reset").removeClass('hidden');
+                                        $("#layers_checkbox").removeClass('hidden');
+                                    }else{
+                                        $('.info').html('<b>Error processing the request. Please be sure to click on a feature.'+data.error+'</b>');
+                                        $('#info').removeClass('hidden');
+                                        $("#layers_checkbox").addClass('hidden');
+                                    }
+                                });
+
+                            }
+                        }
+                    }
+                }
+            },
+            title: {
+                text:'Percent coverage of water at '+(name)+' ('+(lon.toFixed(3))+','+(lat.toFixed(3))+')'
+                // style: {
+                //     fontSize: '13px',
+                //     fontWeight: 'bold'
+                // }
+            },
+            xAxis: {
+                type: 'datetime',
+                labels: {
+                    format: '{value:%d %b %Y}'
+                    // rotation: 90,
+                    // align: 'left'
+                },
+                title: {
+                    text: 'Date'
+                }
+            },
+            yAxis: {
+                title: {
+                    text: '%'
+                },
+                max: 1
+            },
+            exporting: {
+                enabled: true
+            },
+            series: [{
+                data:data,
+                name: 'Historical percent coverage of water'
+            }]
+        });
+    };
+
+    generate_forecast = function(data,lat,lon,name){
+        Highcharts.stockChart('forecast-plotter',{
+            chart: {
+                type:'line',
+                zoomType: 'x'
+            },
+            plotOptions: {
+                series: {
+                    marker: {
+                        enabled: true
+                    },
+                    allowPointSelect:true,
+                    cursor: 'pointer',
+                    point: {
+                        events: {
+                            click: function () {
+                                $('.info').html('');
+                                $("#meta-table").html('');
+                                $("#reset").addClass('hidden');
+                                $("#layers_checkbox").addClass('hidden');
+                                var lat = $("#current-lat").val();
+                                var lon = $("#current-lon").val();
+                                var xhr = ajax_update_database('mndwi',{'xValue':this.x,'yValue':this.y,'lat':lat,'lon':lon});
+                                xhr.done(function(data) {
+                                    if("success" in data) {
+                                        map.getLayers().item(3).getSource().setUrl("https://earthengine.googleapis.com/map/"+data.water_mapid+"/{z}/{x}/{y}?token="+data.water_token);
+                                        $("#meta-table").append('<tbody><tr><th>Latitude</th><td>'+(parseFloat(lat).toFixed(6))+'</td></tr><tr><th>Longitude</th><td>'+(parseFloat(lon).toFixed(6))+'</td></tr><tr><th>Current Date</th><td>'+data.date+'</td></tr><tr><th>Scene Cloud Cover</th><td>'+data.cloud_cover+'</td></tr></tbody>');
+                                        $("#reset").removeClass('hidden');
+                                        $("#layers_checkbox").removeClass('hidden');
+                                    }else{
+                                        $('.info').html('<b>Error processing the request. Please be sure to click on a feature.'+data.error+'</b>');
+                                        $('#info').removeClass('hidden');
+                                        $("#layers_checkbox").addClass('hidden');
+                                    }
+                                });
+
+                            }
+                        }
+                    }
+                }
+            },
+            title: {
+                text:'Percent coverage of water at '+(name)+' ('+(lon.toFixed(3))+','+(lat.toFixed(3))+')'
+                // style: {
+                //     fontSize: '13px',
+                //     fontWeight: 'bold'
+                // }
+            },
+            xAxis: {
+                type: 'datetime',
+                labels: {
+                    format: '{value:%d %b %Y}'
+                    // rotation: 90,
+                    // align: 'left'
+                },
+                title: {
+                    text: 'Date'
+                }
+            },
+            yAxis: {
+                title: {
+                    text: '%'
+                },
+                max: 1
+            },
+            exporting: {
+                enabled: true
+            },
+            series: [{
+                data:data,
+                name: 'Forecast percent coverage of water'
+            }]
+        });
+    };
+
 
     init_all = function(){
         init_vars();
@@ -180,6 +379,26 @@ var LIBRARY_OBJECT = (function() {
     // the DOM tree finishes loading
     $(function() {
         init_all();
+        $(".alert").click(function(){
+            $(".alert").alert("close");
+        });
+        $('#mndwi_toggle').change(function() {
+            // this will contain a reference to the checkbox
+            if (this.checked) {
+                map.getLayers().item(3).setVisible(true);
+            } else {
+                map.getLayers().item(3).setVisible(false);
+            }
+        });
+
+        $('#ponds_toggle').change(function() {
+            // this will contain a reference to the checkbox
+            if (this.checked) {
+                map.getLayers().item(2).setVisible(true);
+            } else {
+                map.getLayers().item(2).setVisible(false);
+            }
+        });
     });
 
 
